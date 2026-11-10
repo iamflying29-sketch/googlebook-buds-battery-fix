@@ -2,6 +2,7 @@ package local.budsfix
 
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
+import android.bluetooth.BluetoothProfile
 import android.content.AttributionSource
 import android.content.Context
 import android.content.ContextWrapper
@@ -35,6 +36,17 @@ import java.util.concurrent.Executor
  * unknown. The new case value is kept.
  * Every other change, real or unknown, passes through untouched, so any real report from the
  * earbuds always wins at once. It never invents a number, holds no wake lock and changes no setting.
+ *
+ * Second job, LE Audio auto-connect for the Pixel Buds: on a multi-user device, Bluetooth first starts
+ * for the system user at boot. If that user's LE Audio setting for the buds is "forbidden", it takes
+ * them off LE Audio's auto-connect list and saves that. When Bluetooth then starts for the person's
+ * own user, its step that puts allowed devices back on the list can run before the buds are loaded
+ * (seen on the Googlebook: 2 ms too early), so they are never put back and do not auto-connect. Once
+ * per Bluetooth start, when Bluetooth has run for BT_SETTLE_MS, this helper re-applies the buds' LE
+ * Audio setting in the current user, but only if it already is "allowed" (100) and LE Audio is not
+ * connected or connecting. That is the same call as the LE Audio switch in Settings: it puts the buds
+ * back on the auto-connect list and asks LE Audio to connect them. If they are in the case, the
+ * request times out after 30 s and they stay on the auto-connect list. Classic audio is not touched.
  */
 object Helper {
     // BluetoothDevice metadata keys (Android's public constants).
@@ -56,6 +68,18 @@ object Helper {
     /** Any Bluetooth call that takes longer than this means something is wrong: exit and be restarted. */
     private const val STALL_MS = 20_000L
 
+    // LE Audio auto-connect (second job). Profile number and values from BluetoothProfile.
+    private const val LE_AUDIO = 22
+    private const val POLICY_ALLOWED = 100
+    private const val STATE_CONNECTING = 1
+    private const val STATE_CONNECTED = 2
+    /** Bluetooth must have run this long, so LE Audio has loaded the paired earbuds. */
+    private const val BT_SETTLE_MS = 10_000L
+    /** How long LE Audio may take to answer the profile request. */
+    private const val PROXY_WAIT_MS = 15_000L
+    /** The Bluetooth start (process id and start time) the step was last done for. */
+    private val REARM_FILE = java.io.File("/data/local/tmp/budsfix/le-audio-rearm.txt")
+
     private class Reading(val left: String, val leftCharging: String, val right: String, val rightCharging: String, val at: Long)
 
     private class Watched(val device: BluetoothDevice, val listener: Any) {
@@ -68,7 +92,12 @@ object Helper {
     }
 
     private lateinit var adapter: BluetoothAdapter
+    private lateinit var context: Context
     private lateinit var listenerClass: Class<*>
+    private var rearmBusy = false
+    private var rearmToken: Any? = null
+    private var rearmFor = ""
+    private var rearmTries = 0
     private lateinit var worker: Handler
     private val watched = mutableMapOf<String, Watched>()
     @Volatile private var callStartedAt = 0L
@@ -106,7 +135,7 @@ object Helper {
     /** A Bluetooth adapter object that presents the adb shell user's identity. */
     private fun shellAdapter(): BluetoothAdapter {
         val shell = AttributionSource.Builder(android.os.Process.myUid()).setPackageName("com.android.shell").build()
-        val context = ShellContext(systemContext(), shell)
+        context = ShellContext(systemContext(), shell)
         val binder = Class.forName("android.os.ServiceManager").getMethod("getService", String::class.java)
             .invoke(null, "bluetooth_manager") as IBinder? ?: error("the Bluetooth manager service is not running")
         val mgrClass = Class.forName("android.bluetooth.IBluetoothManager")
@@ -199,11 +228,124 @@ object Helper {
                 for (w in watched.values) if (w.connectedSinceReal && !connected(w.device)) w.connectedSinceReal = false
                 val gone = watched.keys - bonded.map { it.address }.toSet()
                 for (a in gone) { watched.remove(a); log("$a is no longer paired") }
+                maybeRearm()
             }
         } catch (e: Throwable) {
             log("rescan failed: $e")
         }
         worker.postDelayed(::rescan, RESCAN_MS)
+    }
+
+    /**
+     * The running Bluetooth process as "pid:start time" plus its age in ms, or null if there is none
+     * or more than one (a user switch in progress).
+     */
+    private fun bluetoothProcess(): Pair<String, Long>? {
+        val found = ArrayList<String>()
+        for (p in java.io.File("/proc").list() ?: return null) {
+            if (p.isEmpty() || !p.all { it.isDigit() }) continue
+            val name = try { java.io.File("/proc/$p/cmdline").readBytes().takeWhile { it != 0.toByte() }.toByteArray().toString(Charsets.UTF_8) } catch (_: Throwable) { continue }
+            if (name == "com.google.android.bluetooth" || name == "com.android.bluetooth") found += p
+        }
+        if (found.size != 1) return null
+        val pid = found[0]
+        val stat = try { java.io.File("/proc/$pid/stat").readText() } catch (_: Throwable) { return null }
+        // Field 22 (start time, in clock ticks since boot) counted after the ")" that ends the name.
+        val start = stat.substringAfterLast(')').trim().split(' ').getOrNull(19)?.toLongOrNull() ?: return null
+        val ticks = android.system.Os.sysconf(android.system.OsConstants._SC_CLK_TCK).takeIf { it > 0 } ?: 100L
+        val age = SystemClock.elapsedRealtime() - start * 1000 / ticks
+        return "$pid:$start" to age
+    }
+
+    private fun isPixelBuds(d: BluetoothDevice): Boolean =
+        (d.name ?: "").contains("Pixel Buds") || (get(d, 1) ?: "").contains("Pixel Buds") // 1 = model name
+
+    /** Once per Bluetooth start: put the Pixel Buds back on LE Audio's auto-connect list (see the top). */
+    private fun maybeRearm() {
+        if (rearmBusy) return
+        val (id, age) = bluetoothProcess() ?: return
+        val done = try { REARM_FILE.readText().trim() } catch (_: Throwable) { "" }
+        if (done == id) return
+        if (rearmFor != id) { rearmFor = id; rearmTries = 0 }
+        if (rearmTries >= 2) return
+        if (age < BT_SETTLE_MS) {
+            worker.postDelayed(::maybeRearm, BT_SETTLE_MS - age + 1_000)
+            return
+        }
+        val buds = watched.values.map { it.device }.filter { isPixelBuds(it) }
+        if (buds.isEmpty()) return
+        val profiles = try {
+            call { BluetoothAdapter::class.java.getMethod("getSupportedProfiles").invoke(adapter) as List<*> }
+        } catch (_: Throwable) { emptyList<Any>() }
+        if (profiles.isNotEmpty() && LE_AUDIO !in profiles) {
+            log("LE Audio is not in use on this device; nothing to put back on its auto-connect list")
+            saveRearm(id)
+            return
+        }
+        rearmTries++
+        rearmBusy = true
+        val token = Any()
+        rearmToken = token
+        val listener = object : BluetoothProfile.ServiceListener {
+            override fun onServiceConnected(profile: Int, proxy: BluetoothProfile) {
+                worker.post {
+                    // An answer that came after its wait ran out is not used.
+                    if (!rearmBusy || rearmToken !== token) { closeProxy(proxy); return@post }
+                    worker.removeCallbacksAndMessages(token)
+                    rearm(id, proxy, buds)
+                }
+            }
+            override fun onServiceDisconnected(profile: Int) {}
+        }
+        val asked = try { call { adapter.getProfileProxy(context, listener, LE_AUDIO) } } catch (e: Throwable) { log("LE Audio request failed: $e"); false }
+        if (!asked) {
+            rearmBusy = false
+            log("LE Audio is not available on this device; nothing to put back on its auto-connect list")
+            saveRearm(id)
+            return
+        }
+        worker.postAtTime({
+            rearmBusy = false
+            rearmToken = null
+            log("LE Audio did not answer within ${PROXY_WAIT_MS / 1000} s" + if (rearmTries < 2) "; trying again at the next check" else "; not trying again until Bluetooth restarts")
+            if (rearmTries >= 2) saveRearm(id)
+        }, token, SystemClock.uptimeMillis() + PROXY_WAIT_MS)
+    }
+
+    private fun rearm(id: String, proxy: BluetoothProfile, buds: List<BluetoothDevice>) {
+        try {
+            val c = proxy.javaClass
+            val getPolicy = c.getMethod("getConnectionPolicy", BluetoothDevice::class.java)
+            val setPolicy = c.getMethod("setConnectionPolicy", BluetoothDevice::class.java, Int::class.javaPrimitiveType)
+            for (d in buds) {
+                val policy = call { getPolicy.invoke(proxy, d) as Int }
+                val state = call { proxy.getConnectionState(d) }
+                val what = when {
+                    policy != POLICY_ALLOWED -> "LE Audio is not allowed for them (setting $policy); nothing changed"
+                    state == STATE_CONNECTED -> "already connected over LE Audio; nothing changed"
+                    state == STATE_CONNECTING -> "already connecting over LE Audio; nothing changed"
+                    call { setPolicy.invoke(proxy, d, POLICY_ALLOWED) as Boolean } ->
+                        "re-applied their allowed LE Audio setting, so they are back on LE Audio's auto-connect list"
+                    else -> "re-applying their LE Audio setting was refused"
+                }
+                log("LE Audio after a Bluetooth start: ${d.name} (${d.address.takeLast(5)}): $what")
+            }
+            saveRearm(id)
+        } catch (e: Throwable) {
+            log("LE Audio step failed: $e${e.cause?.let { " / $it" } ?: ""}")
+        } finally {
+            closeProxy(proxy)
+            rearmBusy = false
+            rearmToken = null
+        }
+    }
+
+    private fun closeProxy(proxy: BluetoothProfile) {
+        try { call { adapter.closeProfileProxy(LE_AUDIO, proxy) } } catch (_: Throwable) {}
+    }
+
+    private fun saveRearm(id: String) {
+        try { REARM_FILE.writeText("$id\n") } catch (e: Throwable) { log("could not save the LE Audio step's state: $e") }
     }
 
     private fun watch(d: BluetoothDevice) {

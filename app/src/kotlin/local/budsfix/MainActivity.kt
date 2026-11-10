@@ -45,6 +45,11 @@ class MainActivity : Activity() {
                 "within milliseconds. It only uses a reading the buds reported while it was watching, within " +
                 "the last 10 minutes or with the buds connected ever since. Every real report from the buds " +
                 "passes through untouched, so new levels always show at once. It never makes up a number.\n\n" +
+                "It also keeps your Pixel Buds on LE Audio's auto-connect list. When Bluetooth starts at a " +
+                "restart, it can take the buds off that list by mistake, so they no longer connect by " +
+                "themselves. Once after every Bluetooth start, Buds Battery Fix re-applies the buds' LE Audio " +
+                "setting, but only if LE Audio is already allowed for them and they are not connected. That " +
+                "puts them back on the list. Classic Bluetooth audio is never touched.\n\n" +
                 "It runs on this device itself, without the Linux Terminal. This app starts it again after " +
                 "every restart and checks it every 15 minutes. Its log is in ${Fixer.DIR} on this device. " +
                 "Nothing is ever deleted."

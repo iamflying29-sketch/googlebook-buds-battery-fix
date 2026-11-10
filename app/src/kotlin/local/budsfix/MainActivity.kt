@@ -47,9 +47,13 @@ class MainActivity : Activity() {
                 "passes through untouched, so new levels always show at once. It never makes up a number.\n\n" +
                 "It also keeps your Pixel Buds on LE Audio's auto-connect list. When Bluetooth starts at a " +
                 "restart, it can take the buds off that list by mistake, so they no longer connect by " +
-                "themselves. Once after every Bluetooth start, Buds Battery Fix re-applies the buds' LE Audio " +
-                "setting, but only if LE Audio is already allowed for them and they are not connected. That " +
-                "puts them back on the list. Classic Bluetooth audio is never touched.\n\n" +
+                "themselves. Once after every Bluetooth start, Buds Battery Fix looks in Bluetooth's own log. " +
+                "If the buds are on the list or connected, it changes nothing. If not, and LE Audio is allowed " +
+                "for them, it re-applies their LE Audio setting, which puts them back on the list, and then " +
+                "confirms it. Classic Bluetooth audio is never touched.\n\n" +
+                "After every start, and after every system or app update, it checks that everything it relies " +
+                "on still works. If something stopped working, this window says \"Needs attention\" with the " +
+                "reason, and you get a notification.\n\n" +
                 "It runs on this device itself, without the Linux Terminal. This app starts it again after " +
                 "every restart and checks it every 15 minutes. Its log is in ${Fixer.DIR} on this device. " +
                 "Nothing is ever deleted."
@@ -74,10 +78,15 @@ class MainActivity : Activity() {
         val text = p.getString(Status.LAST_TEXT, "") ?: ""
         val lines = text.lines()
         val running = lines.any { it == "running" }
+        val attention = Fixer.attentionIn(text)
         when {
             lastCheck == 0L -> {
                 state.text = "Not checked yet"
                 state.setTextColor(Color.LTGRAY)
+            }
+            running && attention.isNotEmpty() -> {
+                state.text = "Needs attention"
+                state.setTextColor(Color.rgb(0xf2, 0xc0, 0x5c))
             }
             running -> {
                 state.text = "Fixing"
@@ -94,6 +103,8 @@ class MainActivity : Activity() {
             ?.let { out.add("Last fix: $it") }
         if (lastCheck > 0) out.add("Last check by this app: ${time(lastCheck)}")
         if (!running && text.isNotEmpty()) out.add(lines.first())
+        for (a in attention) out.add("Needs attention: $a")
+        lines.firstOrNull { it.startsWith("self-check:") }?.let { out.add(it.replaceFirstChar { c -> c.uppercase() }) }
         details.text = out.joinToString("\n")
     }
 

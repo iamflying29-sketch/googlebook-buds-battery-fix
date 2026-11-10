@@ -14,7 +14,13 @@ object Fixer {
     private const val SCRIPT = "budsfix.sh"
     private val lock = Any()
 
-    class Result(val reachable: Boolean, val running: Boolean, val stoppedByUser: Boolean, val text: String)
+    class Result(val reachable: Boolean, val running: Boolean, val stoppedByUser: Boolean, val text: String) {
+        /** The helper's self-check findings that need a look (lines "attention: ..." from status). */
+        val attention: List<String> get() = attentionIn(text)
+    }
+
+    fun attentionIn(text: String): List<String> =
+        text.lines().filter { it.startsWith("attention: ") }.map { it.removePrefix("attention: ").trim() }
 
     /** Installs a changed script, restarts after an app update, and makes sure the fix is running. */
     fun check(ctx: Context, appUpdated: Boolean = false): Result = synchronized(lock) {

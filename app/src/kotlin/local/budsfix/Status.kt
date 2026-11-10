@@ -38,6 +38,28 @@ object Status {
             e.apply()
             maybeAlert(c, r.text)
         }
+        // The helper's self-check: tell at once when something it relies on stopped working, for
+        // example after a system update. Only while the fix runs; the alert above covers the rest.
+        if (r.running && r.attention.isNotEmpty()) attentionAlert(c, r.attention)
+        else if (r.reachable) c.getSystemService(NotificationManager::class.java).cancel(ATTENTION_ID)
+    }
+
+    private const val ATTENTION_CHANNEL = "needs-attention"
+    private const val ATTENTION_ID = 2
+
+    private fun attentionAlert(c: Context, items: List<String>) {
+        val nm = c.getSystemService(NotificationManager::class.java)
+        nm.createNotificationChannel(NotificationChannel(ATTENTION_CHANNEL, "Needs attention", NotificationManager.IMPORTANCE_DEFAULT))
+        val open = PendingIntent.getActivity(c, 0, Intent(c, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
+        val first = items.first().replaceFirstChar { it.uppercase() }
+        nm.notify(ATTENTION_ID, Notification.Builder(c, ATTENTION_CHANNEL)
+            .setSmallIcon(R.drawable.ic_stat)
+            .setContentTitle("Buds Battery Fix needs attention")
+            .setContentText(first)
+            .setStyle(Notification.BigTextStyle().bigText(items.joinToString("\n") { it.replaceFirstChar { ch -> ch.uppercase() } }))
+            .setContentIntent(open)
+            .setOnlyAlertOnce(true)
+            .build())
     }
 
     fun recordError(c: Context, error: String) =

@@ -10,7 +10,12 @@ straight through, so the levels stay current. It never makes up a number.
 It also makes sure my Pixel Buds keep connecting by themselves over LE Audio after a restart. On my
 Googlebook, Bluetooth's start at boot can take the earbuds off LE Audio's auto-connect list, so they
 no longer connect when I take them out of the case. Once after every Bluetooth start, Buds Battery
-Fix puts them back on that list.
+Fix checks that list and puts them back on it if they are missing.
+
+It is built to survive system updates. After every start, and after every GooglebookOS, Bluetooth or
+Play services update, it checks that everything it relies on still works. If something stopped
+working, the app says "Needs attention" with the reason and shows a notification, so it can never
+break silently.
 
 It runs on each device itself as a small helper, with no Linux Terminal involved, and a small native
 Android app starts it again after every restart.
@@ -28,10 +33,14 @@ Android app starts it again after every restart.
   for example when the case is out of reach.
 * It writes a line to its log for each fix, and the app shows how many fixes it made this month and
   when the last one was.
-* Once after every Bluetooth start, it re-applies the Pixel Buds' LE Audio setting, but only if LE
-  Audio is already allowed for them and they are not connected or connecting. That puts them back on
-  LE Audio's auto-connect list. It never touches Classic Bluetooth audio, and on a device that does
-  not use LE Audio it does nothing.
+* Once after every Bluetooth start, it looks in Bluetooth's own log to see whether the Pixel Buds are
+  on LE Audio's auto-connect list. If they are, or if they are connected, it changes nothing. If not,
+  and LE Audio is allowed for them, it re-applies their LE Audio setting, which puts them back on the
+  list, and 35 seconds later it confirms the result. It never touches Classic Bluetooth audio, and on
+  a device that does not use LE Audio it does nothing.
+* After every start it runs a self-check, records the system build and the Bluetooth and Play
+  services versions, and logs which of them an update changed. The app shows "Needs attention" and a
+  notification if any check fails.
 
 ## The problem
 
@@ -119,10 +128,45 @@ and the adb shell user may make it.
 
 The helper notices each new start of the Bluetooth service, by its process ID and start time. Once
 the service has run for 10 seconds, so LE Audio has loaded the paired earbuds, the helper reads the
-Pixel Buds' LE Audio setting in the current Android user. Only if it is "allowed" and LE Audio is not
-connected or connecting does it set "allowed" again. The value stays the same, so nothing else
-changes. It does this once per Bluetooth start, so a later restart of the helper itself, for example
+Pixel Buds' LE Audio setting in the current Android user. If it is not "allowed", the helper leaves
+it that way. If the earbuds are connected or connecting, it changes nothing.
+
+Otherwise it reads that Bluetooth process's own log lines about the earbuds' LE Audio connection
+state. When the latest one says they are on the auto-connect list, it changes nothing. When there is
+none, which is what the failed restart looked like, it sets "allowed" again. The value stays the
+same, so no setting changes. 35 seconds later, after LE Audio's 30 second connection request has had
+time to finish, it reads the log again and confirms that the earbuds are connected or back on the
+list. It does all this once per Bluetooth start, so a later restart of the helper itself, for example
 after an app update, does not repeat it.
+
+The log is read in a bounded way: only the Bluetooth process's lines about these earbuds, read while
+they arrive, with a 10 second deadline and a 256 KB cap, after which the reader closes the pipe and
+stops the command. If the log cannot be read, or an update changed its wording, the helper does not
+guess. It sets "allowed" again anyway, which I tested and found harmless both when the earbuds were
+missing from the list and when they were on it.
+
+### Staying working through updates
+
+An update of GooglebookOS, the Bluetooth module or Play services could change any of the system
+parts this fix uses. So at every start the helper checks each of them and writes the result to
+`/data/local/tmp/budsfix/health.txt`, one line per item, marked `ok`, `info` or `attention`:
+
+* that it could open Bluetooth as the adb shell user, and which of its four ways worked;
+* that the adb shell user still has Android's Bluetooth privileges, which the battery fix needs;
+* that each pair of Pixel Buds is marked by Fast Pair as true wireless earbuds and that Android
+  accepted the listener for their battery values;
+* whenever it writes a correction, that Android accepted every value;
+* that it can find Bluetooth's process and that LE Audio answers. It also looks for a Bluetooth
+  process whose name an update changed, by its name pattern and Bluetooth's user ID, but I could not
+  test that case;
+* the outcome of the LE Audio step and its confirmation;
+* the system build and the Bluetooth and Play services versions.
+
+It keeps the versions in `versions.txt`. When an update changed one of them, the log says which one,
+from which version to which, and the self-check runs right after. `budsfix.sh status` shows every
+`attention` line and a summary. The app reads those lines at every check. If there are any, its
+window says **Needs attention** with the reasons and it shows a notification, which goes away by
+itself at the first check that finds everything working again.
 
 ### The app
 
@@ -143,8 +187,11 @@ shows a notification.
   After an app update, the app restarted the helper with the new code by itself.
 * **Independence:** I disconnected my computer from the Tab P12 completely for 45 seconds. The same
   supervisor and helper kept running.
-* **A real restart:** after I restarted my Googlebook, the app started the fix by itself, 16 seconds
-  after Bluetooth came up, without the Linux Terminal or the app's window.
+* **Real restarts:** after I restarted my Googlebook, the app started the fix by itself, 16 seconds
+  after Bluetooth came up, without the Linux Terminal or the app's window. I restarted again with the
+  LE Audio step installed and the earbuds in the closed case. On that restart Bluetooth put the
+  earbuds back on the auto-connect list by itself, the step ran 13 seconds after Bluetooth started,
+  and when I took the earbuds out they connected by themselves over LE Audio and stayed connected.
 * **Real bad values:** on November 10, 2026, it caught Fast Pair's real bad values for the first time
   on both devices. On the Googlebook, Fast Pair stored both earbuds as unknown with the case at 97%,
   and the helper put back 100% left and 100% right, which the earbuds had reported 2 minutes earlier
@@ -158,6 +205,19 @@ shows a notification.
   does no harm after a restart where nothing went wrong.
 * **On the Tab P12,** which does not use LE Audio, the new helper correctly reported that LE Audio is
   not in use and changed nothing.
+* **The log check,** with the earbuds in the closed case: it read their state as on the auto-connect
+  list, and the fix then said "already on LE Audio's auto-connect list; nothing changed". With the
+  earbuds in my ears, it read them as connected.
+* **The confirmation:** in a test run that re-applies the setting regardless, the helper re-applied
+  it with the earbuds in the case and confirmed 35 seconds later that they were back on the
+  auto-connect list. When I took them out, they connected by themselves over LE Audio.
+* **The log reader's limits:** a small read finished normally, a large read stopped at a 4 KB cap,
+  and an endless read stopped at a 2 second deadline. No reader process was left behind, and
+  Bluetooth kept responding.
+* **The self-check and the warning:** on my Googlebook every check passed. I added a test line marked
+  `attention` to the self-check file, and the app showed the "Buds Battery Fix needs attention"
+  notification with that text. After I took the line out, the app's next check removed the
+  notification.
 
 ## Requirements
 
@@ -296,16 +356,23 @@ fixed: Fast Pair stored the buds as unknown with the case at 100%; put back the 
 After each Bluetooth start, the LE Audio step adds a line like one of these:
 
 ```
-LE Audio after a Bluetooth start: Pixel Buds 2a (XX:XX): re-applied their allowed LE Audio setting, so they are back on LE Audio's auto-connect list
+LE Audio after a Bluetooth start: Pixel Buds 2a (XX:XX): already on LE Audio's auto-connect list; nothing changed
 LE Audio after a Bluetooth start: Pixel Buds 2a (XX:XX): already connected over LE Audio; nothing changed
+LE Audio after a Bluetooth start: Pixel Buds 2a (XX:XX): re-applied their allowed LE Audio setting (the system log shows they were never put back on LE Audio's auto-connect list), so they are back on LE Audio's auto-connect list
+LE Audio after a Bluetooth start: Pixel Buds 2a (XX:XX): re-applied their LE Audio setting; confirmed back on LE Audio's auto-connect list
 LE Audio is not in use on this device; nothing to put back on its auto-connect list
 ```
+
+At every start the log also says `self-check: all checks passed`, or how many items need attention,
+and after an update it names what changed, for example
+`an update was installed since the last start: Google Play services was ... and is now ...`.
 
 ### Commands
 
 Run these with `adb shell sh /data/local/tmp/budsfix/budsfix.sh <command>`:
 
-* `status`: whether it runs, the fixes this month, the last fix, and the end of the log;
+* `status`: whether it runs, the fixes this month, the last fix, every self-check item that needs
+  attention with a summary line, and the end of the log;
 * `stop`: stops the fix; it stays stopped, even after restarts, until `start`;
 * `start`: starts it again after a stop.
 
@@ -314,6 +381,26 @@ Run these with `adb shell sh /data/local/tmp/budsfix/budsfix.sh <command>`:
 Build the new version and install it over the old one with `adb install -r --user <USER_ID>
 BudsBatteryFix.apk`. The app notices its own update, copies a changed supervisor script to the device
 and restarts the helper with the new code. I tested this on my Googlebook.
+
+### Testing it yourself
+
+The helper has three test runs. Each one runs by hand, exits by itself, and leaves the running fix
+alone. Copy the app to the device first, then run them from `/data/local/tmp/budsfix`:
+
+```bash
+adb push BudsBatteryFix.apk /data/local/tmp/budsfix/helper-test.apk
+adb shell 'cd /data/local/tmp/budsfix && timeout 40 app_process -cp helper-test.apk / local.budsfix.Helper test-log-reader'
+adb shell 'cd /data/local/tmp/budsfix && timeout 30 app_process -cp helper-test.apk / local.budsfix.Helper test-le-state'
+adb shell 'cd /data/local/tmp/budsfix && timeout 100 app_process -cp helper-test.apk / local.budsfix.Helper test-rearm-force'
+```
+
+* `test-log-reader` checks the log reader's three endings: finished, stopped at the size cap and
+  stopped at the deadline.
+* `test-le-state` changes nothing. It prints Bluetooth's process and what the log says about the
+  earbuds' LE Audio state.
+* `test-rearm-force` re-applies the earbuds' allowed LE Audio setting even when they are already on
+  the list, then confirms the result and exits. While they are connected it changes nothing and exits
+  at once. Run it with the earbuds in the closed case.
 
 ## Uninstalling
 
@@ -342,7 +429,11 @@ with `adb shell rm -r /data/local/tmp/budsfix`.
   earbuds disconnected in between, so the helper did not put it back.
 * **Your earbuds are not watched.** The helper only watches paired devices that Fast Pair marks as true
   wireless headsets with left, right and case levels.
-* **The log says "LE Audio is not allowed for them".** LE Audio is switched off for the earbuds in
+* **The app says Needs attention.** The reason is shown in the app and in the notification, and
+  `budsfix.sh status` lists it too. The most likely cause is a system update that changed something
+  the fix relies on. Look in the log for the "an update was installed" line to see which update it
+  was. Until it is solved, the parts of the fix that still work keep running.
+* **The log says LE Audio is switched off for them.** LE Audio is switched off for the earbuds in
   their Bluetooth settings, so the helper leaves it that way. Switch it on there if you want it.
 * **The earbuds still did not connect by themselves after a restart.** Look for the "LE Audio after a
   Bluetooth start" line in the log. If it is missing, the helper had not yet seen that Bluetooth start.
@@ -352,9 +443,15 @@ with `adb shell rm -r /data/local/tmp/budsfix`.
 * The helper holds no wake lock and uses no network. It only writes the four earbud values, left and
   right level and charging, of paired Fast Pair headsets, and only in the one bad combination described
   above.
-* Its only other action is the LE Audio step: once after each Bluetooth start, it sets the Pixel Buds'
-  LE Audio setting to "allowed" when it already is "allowed", so the value never changes. It never
-  touches Classic Bluetooth audio or any other device.
+* Its only other action is the LE Audio step: once after each Bluetooth start, and only when the
+  earbuds are missing from LE Audio's auto-connect list or the log cannot tell, it sets the Pixel
+  Buds' LE Audio setting to "allowed" when it already is "allowed", so the value never changes. It
+  never touches Classic Bluetooth audio or any other device.
+* It reads Bluetooth's log only for that step, once per Bluetooth start plus the confirmation, with a
+  deadline and a size cap.
+* Besides its monthly log, it rewrites only its own small state files in `/data/local/tmp/budsfix`:
+  `health.txt`, `versions.txt` and `le-audio-rearm.txt`. The test runs described below use their own
+  files whose names start with `test-`.
 * It never makes up a value. It only writes back a reading that the earbuds reported shortly before.
 * Every Bluetooth call is watched, and a call that hangs for 20 seconds ends the helper so the
   supervisor can start a clean one.
@@ -378,18 +475,23 @@ with `adb shell rm -r /data/local/tmp/budsfix`.
 * Lenovo's own battery widget on the Tab P12 shows earbuds as one combined level from a different
   source, so this fix does not change it.
 * I have tested it only with Pixel Buds 2a, on GooglebookOS (Android 17) and Android 15.
-* The LE Audio step only handles earbuds whose name or model contains "Pixel Buds". At the time of
-  publishing, I have tested it by hand in both states described above, but not yet across a real
-  restart with the new version.
-* When the earbuds are in the case at a Bluetooth start, the LE Audio step's connection request waits
-  up to 30 seconds before it times out, so for that time the Bluetooth settings may show the earbuds as
-  connecting.
+* The LE Audio step only handles earbuds whose name or model contains "Pixel Buds".
+* At the time of publishing, the restart that loses the race has not happened again with the fix
+  installed. I tested that state by hand, and the real restart I did with the fix installed went the
+  normal way.
+* When the step does re-apply the setting while the earbuds are in the case, LE Audio's connection
+  request waits up to 30 seconds before it times out, so for that time the Bluetooth settings may show
+  the earbuds as connecting. When they are already on the list, which is the normal case, nothing
+  happens at all.
+* The log check depends on the wording of Bluetooth's own log lines. If an update changes it, the
+  check cannot tell, so the step re-applies the setting anyway and says that it could not confirm the
+  result.
 
 ## Files
 
 * `app/` is the Buds Battery Fix app:
-  * `src/kotlin/local/budsfix/Helper.kt` is the helper that watches and corrects the stored values
-    and does the LE Audio step;
+  * `src/kotlin/local/budsfix/Helper.kt` is the helper that watches and corrects the stored values,
+    does the LE Audio step and runs the self-check;
   * `Fixer.kt` installs the supervisor script and keeps the fix running;
   * `Adb.kt` and `AdbClient.kt` are the app's own connection to the device's Wireless debugging;
   * `EnsureJob.kt` and `Receivers.kt` are the checks at every restart and every 15 minutes, and the

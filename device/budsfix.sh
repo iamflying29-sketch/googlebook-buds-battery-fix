@@ -122,6 +122,11 @@ case "$1" in
         n=$(grep -c ' fixed: ' $D/fix-$(date +%Y-%m).log 2>/dev/null)
         echo "fixes this month: ${n:-0}"
         echo "last fix: $(grep ' fixed: ' $D/fix-$(date +%Y-%m).log 2>/dev/null | tail -1 | cut -c1-19)"
+        # The helper's self-check (see Helper.kt): every "attention:" line is something to look at.
+        if [ -f $D/health.txt ]; then
+            grep '^attention: ' $D/health.txt
+            echo "self-check: $(grep -c '^ok: ' $D/health.txt) passed, $(grep -c '^attention: ' $D/health.txt) need attention, $(head -1 $D/health.txt)"
+        fi
         echo "--- log ---"
         tail -n "${2:-8}" $D/fix-$(date +%Y-%m).log 2>/dev/null
         ;;

@@ -174,8 +174,6 @@ adb shell appops set --user <USER_ID> local.budsfix AUTO_REVOKE_PERMISSIONS_IF_U
 C=~/.config/buds-fix/googlebook
 mkdir -p $C/adbhome/.android && chmod 700 $C $C/adbhome $C/adbhome/.android
 cd $C/adbhome/.android && adb keygen adbkey
-# give the key a name you will recognize in the Paired devices list
-printf '%s BudsBatteryFix@googlebook\n' "$(awk '{print $1}' adbkey.pub)" > adbkey.pub
 head -c 24 /dev/urandom | base64 | tr -d '/+=' > $C/p12.pass; chmod 600 $C/p12.pass
 openssl req -new -x509 -key adbkey -out $C/cert.pem -days 36500 -subj /CN=BudsBatteryFix
 openssl pkcs12 -export -inkey adbkey -in $C/cert.pem -out $C/key.p12 -passout "pass:$(cat $C/p12.pass)"
@@ -192,8 +190,14 @@ that window. The pairing port is different from the normal one.
 HOME=$C/adbhome adb -P 5045 pair <DEVICE_IP>:<PAIRING_PORT> <PAIRING_CODE>
 ```
 
-It answers "Successfully paired". The key then appears as **BudsBatteryFix@googlebook** under
-**Paired devices**. The separate adb server on port 5045 keeps this key apart from your own adb key.
+It answers "Successfully paired". The separate adb server on port 5045 keeps this key apart from your
+own adb key. Under **Paired devices**, the new entry is named after the computer that paired it, the
+same name as your own adb key, so the name does not tell them apart. The **Device fingerprint** on an
+entry's details page does. This prints the fingerprint of the app's key:
+
+```bash
+awk '{print $1}' $C/adbhome/.android/adbkey.pub | base64 -d | md5sum | cut -c1-32 | tr a-f A-F | sed 's/../&:/g; s/:$//'
+```
 
 ### Step 5. Hand the key to the app and start the fix
 
@@ -256,7 +260,8 @@ adb shell sh /data/local/tmp/budsfix/budsfix.sh stop
 adb uninstall --user <USER_ID> local.budsfix
 ```
 
-Then remove **BudsBatteryFix@googlebook** under **Paired devices** on the Wireless debugging screen.
+Then remove the app's key under **Paired devices** on the Wireless debugging screen: open each entry's
+details, find the one whose **Device fingerprint** matches the command in step 4, and tap **Forget**.
 The folder `/data/local/tmp/budsfix` with the log stays on the device until you remove it yourself
 with `adb shell rm -r /data/local/tmp/budsfix`.
 

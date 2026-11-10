@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- An earbud beside the lines of a log. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
+    <path
+        android:fillColor="#20453A"
+        android:pathData="M24,2A22,22 0,1 1,24,46A22,22 0,1 1,24,2Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M15,12a6,6 0,1 1,0,12a6,6 0,1 1,0,-12zM12.5,22h5v12a2.5,2.5 0,0 1,-5,0z" />
+    <path
+        android:strokeColor="#8FE3B4"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round"
+        android:pathData="M25,15h11M25,21h11M25,27h11M25,33h7" />
+</vector>

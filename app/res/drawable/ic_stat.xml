@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Monochrome notification icon: an earbud beside log lines. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M14,8a7,7 0,1 1,0,14a7,7 0,1 1,0,-14zM11,20h6v16a3,3 0,0 1,-6,0z" />
+    <path
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="3"
+        android:strokeLineCap="round"
+        android:pathData="M25,12h13M25,20h13M25,28h13M25,36h9" />
+</vector>

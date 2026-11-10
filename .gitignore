@@ -1,0 +1,40 @@
+# Build outputs
+build/
+*.apk
+*.idsig
+*.dex
+*.class
+*.ap_
+res.zip
+gen/
+out/
+
+# Keystores, keys and passwords (never commit these)
+*.jks
+*.keystore
+*.p12
+*.pem
+*.pass
+adbkey*
+
+# Backups and logs
+backup/
+*.log
+logs/
+
+# Python and tool leftovers
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# Browser profiles
+profile*/
+profiles/
+
+# Editor and system files
+.idea/
+.vscode/
+*.iml
+.DS_Store
+*~

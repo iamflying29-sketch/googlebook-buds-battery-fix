@@ -43,8 +43,21 @@ class MainActivity : Activity() {
                 "while the case has a real level, so the Batteries widget and Settings show only the case. " +
                 "Buds Battery Fix watches for exactly that moment and puts back the buds' latest real levels " +
                 "within milliseconds. It only uses a reading the buds reported while it was watching, within " +
-                "the last 10 minutes or with the buds connected ever since. Every real report from the buds " +
-                "passes through untouched, so new levels always show at once. It never makes up a number.\n\n" +
+                "the last 10 minutes or with the buds connected ever since, and it remembers that reading when " +
+                "it restarts. Every real report from the buds passes through untouched, so new levels always " +
+                "show at once. It never makes up a number.\n\n" +
+                "Google's Fast Pair pop-up keeps its own copy of the levels and shows only the case once the " +
+                "buds have not reported for 2 minutes. While your buds are connected and out of the case, Buds " +
+                "Battery Fix makes sure they report in time: when their last report is 90 seconds old, it " +
+                "briefly opens the connection that Play services uses to talk to the buds. Play services opens " +
+                "its own connection again within seconds, and the buds then send their real levels. If the buds " +
+                "reported by themselves, it does nothing.\n\n" +
+                "While audio plays to your Pixel Buds over LE Audio, the Pixel Buds app's background connection " +
+                "over Classic Bluetooth can make the sound flange. In that situation, and only while the Pixel " +
+                "Buds app is in the background and not updating firmware, Buds Battery Fix stops it with " +
+                "Android's regular stop and closes the idle Classic link. For that moment, usually well under a " +
+                "second, the app carries Android's stopped mark so it does not reconnect at once. Its jobs, " +
+                "alarms and notifications stay, and opening the app reconnects it as usual.\n\n" +
                 "It also keeps your Pixel Buds on LE Audio's auto-connect list. When Bluetooth starts at a " +
                 "restart, it can take the buds off that list by mistake, so they no longer connect by " +
                 "themselves. Once after every Bluetooth start, Buds Battery Fix looks in Bluetooth's own log. " +
@@ -53,7 +66,10 @@ class MainActivity : Activity() {
                 "confirms it. Classic Bluetooth audio is never touched.\n\n" +
                 "After every start, and after every system or app update, it checks that everything it relies " +
                 "on still works. If something stopped working, this window says \"Needs attention\" with the " +
-                "reason, and you get a notification.\n\n" +
+                "reason, and you get a notification. Each time it puts back the levels, it also saves the " +
+                "pop-up's text and Play services' battery log lines in its folder, so the cause can be studied. " +
+                "On a device where you switch it on, it also turns Wireless debugging back on after Android " +
+                "turned it off because Wi-Fi dropped for a moment.\n\n" +
                 "It runs on this device itself, without the Linux Terminal. This app starts it again after " +
                 "every restart and checks it every 15 minutes. Its log is in ${Fixer.DIR} on this device. " +
                 "Nothing is ever deleted."

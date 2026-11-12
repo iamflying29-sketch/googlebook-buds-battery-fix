@@ -7,6 +7,16 @@ show only the case. Buds Battery Fix notices that moment within a fraction of a 
 the latest real levels that the earbuds themselves reported. Every new report from the earbuds passes
 straight through, so the levels stay current. It never makes up a number.
 
+Google's Fast Pair pop-up keeps its own copy of the levels and does not read those stored values. It
+shows only the case once the earbuds have not reported for 2 minutes. So while my earbuds are
+connected and out of the case, Buds Battery Fix makes sure they report in time, and the pop-up keeps
+showing left, right and case.
+
+On my Googlebook, LE Audio sometimes sounded flanged, with the left and right earbuds fading in and
+out, while the Pixel Buds app kept a Classic Bluetooth connection to the earbuds open in the
+background. While audio plays over LE Audio, Buds Battery Fix now closes that idle Classic connection
+with Android's regular stop of the app, and the app reconnects as usual when I open it.
+
 It also makes sure my Pixel Buds keep connecting by themselves over LE Audio after a restart. On my
 Googlebook, Bluetooth's start at boot can take the earbuds off LE Audio's auto-connect list, so they
 no longer connect when I take them out of the case. Once after every Bluetooth start, Buds Battery
@@ -31,8 +41,22 @@ Android app starts it again after every restart.
   old or the earbuds have stayed connected ever since. Otherwise it leaves the values alone.
 * Every other change passes through untouched, including real reports and other "unknown" values,
   for example when the case is out of reach.
+* It saves its latest real reading in a file, so a restart of the helper itself, for example after an
+  app update, does not make it forget the reading. A saved reading is only used within the same boot of
+  the device.
 * It writes a line to its log for each fix, and the app shows how many fixes it made this month and
-  when the last one was.
+  when the last one was. At each fix it also saves the text of Google's pop-up and Play services'
+  battery log lines in its folder, so the cause can be studied later.
+* While the earbuds are connected and out of the case, it keeps Google's Fast Pair pop-up showing
+  their levels. When the earbuds' last report is 90 seconds old, it briefly opens the connection that
+  Play services uses to talk to the earbuds. Play services opens its own connection again within
+  seconds, and the earbuds then report their real levels. When the earbuds reported by themselves, it
+  does nothing.
+* While audio plays to the Pixel Buds over LE Audio and the Pixel Buds app holds a Classic Bluetooth
+  connection to them in the background, it stops that app with Android's regular stop and closes the
+  idle Classic link. It never does this while the app is on screen or updating firmware.
+* On a device where I switch it on, it turns Wireless debugging back on when Android turned it off
+  because Wi-Fi dropped for a moment.
 * Once after every Bluetooth start, it looks in Bluetooth's own log to see whether the Pixel Buds are
   on LE Audio's auto-connect list. If they are, or if they are connected, it changes nothing. If not,
   and LE Audio is allowed for them, it re-applies their LE Audio setting, which puts them back on the
@@ -85,6 +109,53 @@ refused Classic audio as it should, LE Audio did not pick them up, and the earbu
 about 4 seconds. Because step 3 is a race, I believe this happens after some restarts and not after
 others. I have not verified that.
 
+### Google's pop-up kept showing only the case
+
+After the stored values were fixed, the Batteries widget and the Bluetooth settings showed all three
+levels, but Google's Fast Pair pop-up still showed only the case now and then. I tested it directly:
+I held the stored values at real levels for 11 seconds, and the pop-up did not change. So the pop-up
+does not read them.
+
+I then looked inside Google Play services 26.43.30 to see where the pop-up gets its numbers. It has
+only two sources: the earbuds' encrypted battery advertisement, and the battery message the earbuds
+send over their direct Fast Pair connection to the device, which Google calls the Message Stream.
+Play services keeps a known earbud level against an "unknown" advertisement only for 2 minutes after
+the earbuds last reported. That limit is the Play services setting
+`FastPairConfig__battery_all_the_time_battery_info_expire_millis`, which is 120000 milliseconds by
+default, and only apps with Google's signature may change it.
+
+My earbuds advertise "unknown" for both earbuds while audio plays, and I have seen them do it once
+while idle too. So whenever they went 2 minutes without a real report, the pop-up dropped to "Case"
+alone. The Fast Pair specification says that when a Message Stream connects, the earbuds send their
+battery levels to every connected device, and I confirmed that on both of my devices.
+
+### LE Audio sometimes sounded flanged on my Googlebook
+
+While I watched videos over LE Audio, the sound sometimes flanged, and the left and right earbuds
+faded in and out. It happened only on my Googlebook. My Tab P12 plays over Classic Bluetooth and never
+did it. The Googlebook's own audio path was clean: its counters showed no lost audio packets and no
+buffer underruns. The links to the earbuds, however, timed out several times, and the Pixel Buds app
+kept reopening a Classic Bluetooth connection to the earbuds in the background while LE Audio played.
+When I force-stopped the Pixel Buds app at 00:41 one night as a test, the earbuds closed their
+Classic link to the Googlebook, and I heard no flanging in the next 35 minutes. The flanging comes and
+goes, so one test cannot prove the cause. I have not heard it with the fix running.
+
+In its code, the Pixel Buds app opens its own connection to the earbuds only over Classic Bluetooth.
+It has a receiver that Android
+wakes whenever the earbuds' Classic link opens or closes, or their LE Audio or headset connection
+changes. When the Classic link closes, the app checks whether the earbuds are still connected by any
+profile, counts LE Audio as connected, and starts reopening its Classic connection within about a
+second. That is
+why simply stopping the app does not help: the earbuds close the idle Classic link about 4 seconds
+later, that event wakes the app, and it reconnects.
+
+### Wireless debugging switched itself off on my Tab P12
+
+Wireless debugging on my Tab P12 turned off by itself without a restart. Android's log showed
+"Network disconnected. Disabling adbwifi." at the moment Wi-Fi dropped for a moment, which happened
+when my router's 24 hour address lease ran out. Android turns Wireless debugging off when Wi-Fi
+disconnects, and the helper's app needs it to stay on.
+
 ## How I solved it
 
 ### The stored values can be corrected safely
@@ -118,6 +189,72 @@ taken from the installed Buds Battery Fix app. It:
 
 A supervisor script, `budsfix.sh`, starts the helper and starts it again if it ever exits, after
 5 seconds, and with longer pauses if it keeps failing.
+
+### Remembering the last reading across restarts
+
+The helper writes each real reading to `last-real.txt`, with the time it arrived, whether the earbuds
+stayed connected since, and the device's boot ID. When the helper starts again within the same boot,
+it takes that reading back, so a fix that is needed right after an app update still has a real
+reading to put back. A reading from an earlier boot is never used.
+
+### Keeping Google's Fast Pair pop-up right
+
+Every 4 seconds while the earbuds are connected to the device and out of the case, the helper looks at
+how long ago the earbuds last reported. Play services writes "The device pass battery info to seeker"
+to its log at every report, whoever caused it, so the helper counts every report, including those the
+earbuds send by themselves and those the other device caused. When the last report is 90 seconds old,
+it knocks once:
+
+* **On my Googlebook,** Play services uses the LE form of the Message Stream, an L2CAP channel on the
+  LE link. The helper learns that channel number from Bluetooth's log, opens the same channel for a
+  moment and closes it. The earbuds allow one such stream per device, so Play services' own stream
+  closes, Play services opens it again within seconds, and the earbuds report. This never touches the
+  Classic link.
+* **On my Tab P12,** Play services uses the Classic form, an RFCOMM channel. The file `knock-rfcomm`
+  in the helper's folder makes the helper knock there instead. The earbuds refuse the helper's
+  connection, but the attempt still closes Play services' stream, and the earbuds report when Play
+  services reconnects.
+
+20 seconds after each knock, the helper checks Play services' log for the earbuds' report. Only then
+does it count the knock as done. Otherwise the app says "Needs attention" with the reason. If the
+pop-up ever drops the earbuds although they reported less than 112 seconds earlier, the self-check
+says so too, because that would mean Play services missed the report or an update shortened its 2
+minute limit. When the pop-up does drop the earbuds, the helper knocks at once, and the stored values
+fix corrects the widget and the settings at the same moment.
+
+### Keeping the Classic link quiet while LE Audio plays
+
+Android never delivers events like "link closed" to an app that carries its "stopped" mark. A
+force-stop sets that mark, but it also cancels the app's scheduled jobs and alarms and removes its
+notifications, which I did not want. The adb shell user may set only the mark, without any of the
+rest. So every few seconds while audio plays to the Pixel Buds over LE Audio, the helper checks
+whether the Classic link to them is up, whether the Pixel Buds app is only in the background, and
+whether Bluetooth's log shows that app's Classic connection as open. If all of that is true, it:
+
+1. sets only the stopped mark on the Pixel Buds app;
+2. stops the app with Android's regular stop, which ends its processes but keeps its jobs, alarms and
+   notifications;
+3. closes the idle Classic link from the device's side with Android 17's `disconnectAcl`, for the
+   Classic transport only, so LE Audio keeps playing;
+4. clears the mark 150 milliseconds after the link reads closed.
+
+The mark lasted 612 milliseconds in my test, and a watchdog clears it after 3 seconds at the most if
+anything stalls. If the helper ever stops while the mark is set, it clears the mark at its next start.
+It acts at most every 3 minutes. It never acts while the app is on screen or runs a foreground service,
+such as a firmware update. The app stays off Classic until I open it, Bluetooth restarts, or the
+earbuds connect or disconnect again, for example from the case. Then it reconnects as usual, and the
+fix acts again during the next LE Audio playback.
+
+On my Googlebook's Bluetooth service, `disconnectAcl` reports an error code even when it does close
+the link, so the helper ignores the code and waits until the link actually reads closed.
+
+### Keeping Wireless debugging on, on the Tab P12
+
+Only with the file `keep-wireless-debugging` in the helper's folder, the helper checks every 30
+seconds whether Wireless debugging is on. If it is off, it switches it back on only when Android's
+log shows that Android itself turned it off because Wi-Fi dropped, and only once Wi-Fi is connected
+again, at most 3 times an hour. If Wireless debugging was turned off for any other reason, for example
+by hand, it stays off.
 
 ### Putting the earbuds back on LE Audio's auto-connect list
 
@@ -214,6 +351,33 @@ shows a notification.
 * **The log reader's limits:** a small read finished normally, a large read stopped at a 4 KB cap,
   and an endless read stopped at a 2 second deadline. No reader process was left behind, and
   Bluetooth kept responding.
+* **Restarts and the saved reading:** on my Googlebook, the helper took its saved reading back at
+  each of its 13 restarts between November 11 and 12, 2026, all of them after app updates.
+* **Google's pop-up on my Googlebook:** for 15 minutes of video on November 12, 2026, the pop-up
+  showed left, right and case at every minute I checked, except while the earbuds were in the case.
+  Play services got the earbuds' report 7.2 to 7.4 seconds after each knock, and the knocks never woke
+  the Classic link. Once a report took 18 seconds, so I moved the knock from 95 to 90 seconds.
+* **A miss while idle:** on November 12 at 01:44, with no audio playing, the pop-up showed only the
+  case for less than half a minute, starting exactly 2 minutes after the earbuds' last report. Until then the guard only
+  knocked during audio, because that was the only time I had seen the earbuds advertise "unknown". It
+  now knocks whenever the earbuds are connected and out of the case.
+* **Google's pop-up on my Tab P12:** the earbuds refused the helper's RFCOMM connection, Play services
+  reconnected over RFCOMM 5 seconds later, and it got the earbuds' report 5.8 seconds after the knock.
+* **Both devices at once:** for 8 minutes on November 12, with the earbuds connected to both devices,
+  the pop-up showed left, right and case on both at every minute I checked. On the Tab P12 no audio was
+  playing, and its guard knocked four times. Play services got the earbuds' report 5.6 to 15 seconds
+  after each knock on the Tab P12, and 7.2 to 10.3 seconds after each knock on the Googlebook.
+* **The Classic link during LE Audio:** on November 12 at 02:04, while a video played over LE Audio,
+  the helper stopped the Pixel Buds app with the regular stop and the Googlebook closed only the
+  Classic link. The link was down 440 milliseconds after the request, and the stopped mark lasted
+  612 milliseconds in total. Android did not wake the app. It restarted 10 seconds later through
+  Android's companion device service and stayed off Classic, and 20 seconds later the link was still
+  closed. I heard no flanging during that video. In the first try a minute and a half earlier, the
+  helper had
+  trusted `disconnectAcl`'s error code, cleared the mark after 18 milliseconds, and the app woke up and
+  reconnected, which is why it now waits for the link to read closed.
+* **Wireless debugging on my Tab P12:** on November 11 at 21:56, Android turned Wireless debugging off
+  after a Wi-Fi drop, and the helper switched it back on within the same minute.
 * **The self-check and the warning:** on my Googlebook every check passed. I added a test line marked
   `attention` to the self-check file, and the app showed the "Buds Battery Fix needs attention"
   notification with that text. After I took the line out, the app's next check removed the
@@ -363,6 +527,15 @@ LE Audio after a Bluetooth start: Pixel Buds 2a (XX:XX): re-applied their LE Aud
 LE Audio is not in use on this device; nothing to put back on its auto-connect list
 ```
 
+The pop-up guard and the Classic link fix add lines like these:
+
+```
+pop-up guard: knocked (audio is playing, last report 96 s ago): opened LE channel 240, in 246 ms
+pop-up guard: Play services got the buds' report 7.3 s after the knock
+flanging fix: audio plays over LE Audio while the Pixel Buds app held the Classic link in the background (6 (IMPORTANT_FOREGROUND)); regular stop done; Classic link close requested (code 2147483647), closed after 459 ms; stopped mark set for 612 ms
+flanging fix: 20 s later the Classic link is still closed
+```
+
 At every start the log also says `self-check: all checks passed`, or how many items need attention,
 and after an update it names what changed, for example
 `an update was installed since the last start: Google Play services was ... and is now ...`.
@@ -376,6 +549,18 @@ Run these with `adb shell sh /data/local/tmp/budsfix/budsfix.sh <command>`:
 * `stop`: stops the fix; it stays stopped, even after restarts, until `start`;
 * `start`: starts it again after a stop.
 
+### Switch files
+
+These empty files in `/data/local/tmp/budsfix` switch single parts on or off. Create one with
+`adb shell touch /data/local/tmp/budsfix/<name>` and remove it with
+`adb shell rm /data/local/tmp/budsfix/<name>`. The helper reads them at every check.
+
+* `no-popup-guard` switches the pop-up guard off.
+* `no-classic-quiet` switches the Classic link fix off.
+* `knock-rfcomm` makes the pop-up guard knock over RFCOMM. Use it on a device whose Play services
+  uses the Classic form of the Message Stream, like my Tab P12 with Android 15.
+* `keep-wireless-debugging` switches the Wireless debugging keeper on.
+
 ## Updating
 
 Build the new version and install it over the old one with `adb install -r --user <USER_ID>
@@ -384,7 +569,7 @@ and restarts the helper with the new code. I tested this on my Googlebook.
 
 ### Testing it yourself
 
-The helper has three test runs. Each one runs by hand, exits by itself, and leaves the running fix
+The helper has six test runs. Each one runs by hand, exits by itself, and leaves the running fix
 alone. Copy the app to the device first, then run them from `/data/local/tmp/budsfix`:
 
 ```bash
@@ -392,6 +577,9 @@ adb push BudsBatteryFix.apk /data/local/tmp/budsfix/helper-test.apk
 adb shell 'cd /data/local/tmp/budsfix && timeout 40 app_process -cp helper-test.apk / local.budsfix.Helper test-log-reader'
 adb shell 'cd /data/local/tmp/budsfix && timeout 30 app_process -cp helper-test.apk / local.budsfix.Helper test-le-state'
 adb shell 'cd /data/local/tmp/budsfix && timeout 100 app_process -cp helper-test.apk / local.budsfix.Helper test-rearm-force'
+adb shell 'cd /data/local/tmp/budsfix && timeout 15 app_process -cp helper-test.apk / local.budsfix.Helper test-audio'
+adb shell 'cd /data/local/tmp/budsfix && timeout 45 app_process -cp helper-test.apk / local.budsfix.Helper test-knock'
+adb shell 'cd /data/local/tmp/budsfix && timeout 20 app_process -cp helper-test.apk / local.budsfix.Helper test-mark'
 ```
 
 * `test-log-reader` checks the log reader's three endings: finished, stopped at the size cap and
@@ -401,6 +589,12 @@ adb shell 'cd /data/local/tmp/budsfix && timeout 100 app_process -cp helper-test
 * `test-rearm-force` re-applies the earbuds' allowed LE Audio setting even when they are already on
   the list, then confirms the result and exits. While they are connected it changes nothing and exits
   at once. Run it with the earbuds in the closed case.
+* `test-audio` changes nothing. It prints whether music plays, which devices are active for LE Audio
+  and Classic audio, and how long ago Play services last got a report from the earbuds.
+* `test-knock` knocks once, in the form the switch files choose, and prints whether Play services got
+  the earbuds' report within 20 seconds. It writes its self-check results to `test-health.txt`.
+* `test-mark` changes nothing. It prints whether the Pixel Buds app carries Android's stopped mark and
+  whether the three Android calls the Classic link fix needs are present.
 
 ## Uninstalling
 
@@ -435,6 +629,14 @@ with `adb shell rm -r /data/local/tmp/budsfix`.
   was. Until it is solved, the parts of the fix that still work keep running.
 * **The log says LE Audio is switched off for them.** LE Audio is switched off for the earbuds in
   their Bluetooth settings, so the helper leaves it that way. Switch it on there if you want it.
+* **Google's pop-up still showed only the case.** Look for "pop-up guard" lines in the log around that
+  time, and in the evidence file of that moment in `evidence/`, which holds the pop-up's text then,
+  5 seconds later and 30 seconds later. If the guard was not knocking, check that `no-popup-guard`
+  does not exist. If its knocks get no report, the self-check says so.
+* **The Pixel Buds app's Classic connection keeps coming back.** That is expected after you open the
+  app, after a Bluetooth restart, and after the earbuds connect again. The fix closes it again during
+  the next LE Audio playback, at most every 3 minutes. If the log says "open again" after each try,
+  the helper waits 10 minutes before the next one.
 * **The earbuds still did not connect by themselves after a restart.** Look for the "LE Audio after a
   Bluetooth start" line in the log. If it is missing, the helper had not yet seen that Bluetooth start.
 
@@ -443,15 +645,25 @@ with `adb shell rm -r /data/local/tmp/budsfix`.
 * The helper holds no wake lock and uses no network. It only writes the four earbud values, left and
   right level and charging, of paired Fast Pair headsets, and only in the one bad combination described
   above.
-* Its only other action is the LE Audio step: once after each Bluetooth start, and only when the
-  earbuds are missing from LE Audio's auto-connect list or the log cannot tell, it sets the Pixel
-  Buds' LE Audio setting to "allowed" when it already is "allowed", so the value never changes. It
-  never touches Classic Bluetooth audio or any other device.
-* It reads Bluetooth's log only for that step, once per Bluetooth start plus the confirmation, with a
-  deadline and a size cap.
+* Its other actions are these, and nothing else:
+  * the LE Audio step: once after each Bluetooth start, and only when the earbuds are missing from LE
+    Audio's auto-connect list or the log cannot tell, it sets the Pixel Buds' LE Audio setting to
+    "allowed" when it already is "allowed", so the value never changes;
+  * the pop-up guard's knock: it opens Play services' Message Stream channel to the earbuds for about
+    a quarter of a second and closes it, which makes Play services' own connection to the earbuds
+    pause for usually 5 to 10 seconds before Play services restores it;
+  * the Classic link fix: during LE Audio playback only, the stopped mark on the Pixel Buds app for
+    612 milliseconds in my test and never more than 3 seconds, Android's regular stop of that app,
+    and closing the earbuds' idle
+    Classic link, never the LE link;
+  * the Wireless debugging keeper, only where its switch file exists.
+* It reads Bluetooth's log and Play services' log only for these steps, always with a deadline and a
+  size cap, and it reads the active notifications only to find the text of Google's battery pop-up.
 * Besides its monthly log, it rewrites only its own small state files in `/data/local/tmp/budsfix`:
-  `health.txt`, `versions.txt` and `le-audio-rearm.txt`. The test runs described below use their own
-  files whose names start with `test-`.
+  `health.txt`, `versions.txt`, `le-audio-rearm.txt`, `last-real.txt`, `stream-channel.txt` and
+  `stopped-mark.txt`. The evidence records go to `evidence/`, one file per moment, at most one a
+  minute, and recording stops when the folder reaches 30 MB. The test runs described below use their
+  own files whose names start with `test-`.
 * It never makes up a value. It only writes back a reading that the earbuds reported shortly before.
 * Every Bluetooth call is watched, and a call that hangs for 20 seconds ends the helper so the
   supervisor can start a clean one.
@@ -465,8 +677,20 @@ with `adb shell rm -r /data/local/tmp/budsfix`.
 
 ## Limitations
 
-* **The Fast Pair pop-up is Google Play services' own notification.** I have not verified whether it
-  follows the corrected values or keeps showing only the case until the earbuds' next real report.
+* **The Fast Pair pop-up is Google Play services' own notification.** It does not read the corrected
+  values. The pop-up guard keeps it right by making the earbuds report in time. It relies on Play
+  services' 2 minute limit and on the wording of its log line about the earbuds' reports. If an update
+  changes either one, the self-check says so.
+* While the guard knocks, Play services' own connection to the earbuds pauses for usually 5 to 10
+  seconds, so for that time the pop-up and the Pixel Buds settings may not update.
+* When the earbuds are connected to two devices that both run the fix, both devices often knock within
+  a few seconds of each other, because both see the same reports. That does no harm, but one knock
+  would be enough.
+* The Classic link fix only acts on the Pixel Buds app, package
+  `com.google.android.apps.wearables.maestro.companion`, and only while audio plays over LE Audio. The
+  `disconnectAcl` call exists in Android 17; on older Android versions the fix cannot close the link.
+* I cannot prove with a single test that the Classic link causes the flanging, because the flanging
+  comes and goes. I have not heard it with the fix running.
 * The helper puts back the latest real reading, which was a median of about 2 minutes old at the bad
   moments in my 11 days of data, because that is when the earbuds last reported. It never puts back a
   reading that is more than 10 minutes old, unless the earbuds stayed connected the whole time.
@@ -491,7 +715,8 @@ with `adb shell rm -r /data/local/tmp/budsfix`.
 
 * `app/` is the Buds Battery Fix app:
   * `src/kotlin/local/budsfix/Helper.kt` is the helper that watches and corrects the stored values,
-    does the LE Audio step and runs the self-check;
+    keeps Google's pop-up right, keeps the Classic link quiet during LE Audio, does the LE Audio step,
+    keeps Wireless debugging on where asked, records evidence and runs the self-check;
   * `Fixer.kt` installs the supervisor script and keeps the fix running;
   * `Adb.kt` and `AdbClient.kt` are the app's own connection to the device's Wireless debugging;
   * `EnsureJob.kt` and `Receivers.kt` are the checks at every restart and every 15 minutes, and the
